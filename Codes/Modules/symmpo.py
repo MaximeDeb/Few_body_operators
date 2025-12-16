@@ -301,7 +301,7 @@ class symmetric_Gate:
 			if add_terms is not None:
 				hi += add_terms
 
-			U = sp.linalg.expm(-1.j * hi * dt)
+			U = sp.linalg.expm(-1j * hi * dt)
 
 			self.coordinates = np.zeros((4,6), dtype=int)
 			self.data = np.zeros(6, dtype=object)
