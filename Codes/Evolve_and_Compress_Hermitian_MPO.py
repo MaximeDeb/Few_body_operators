@@ -149,10 +149,11 @@ class classMPO:
                     
             self.compress()
             
-    def compress(self):
+    def compress(self, th=1e-15):
         for i in range(1,self.L):
             s = self.MPO["Lam%s"%i].copy()
-            mask = s**2 > 1e-15
+            mask = s**2 > th
+            s = s[mask]
             self.MPO["Lam%s"%i] = self.MPO["Lam%s"%i][mask]
             self.MPO["B%s"%(i-1)] = self.MPO["B%s"%(i-1)][:,:,:,mask]
             self.MPO["B%s"%(i)] = self.MPO["B%s"%(i)][mask,:,:,:]
@@ -722,8 +723,6 @@ def apply_MPO_MPS(O, Psi):
     
     return Res
 
-
-## 
 L = 10 ## Size of the tensor network
 d = 2     ## Local physical dimension
 
@@ -745,9 +744,9 @@ data_as_tensors = False     ## Stores the data as tensors (True) or as matrices 
 
 ##     ----------------------------------------------------------------------------------------
 ##     ------------------------------- T. evol / Trotter Parameters ---------------------------
-TrottOrder      = 4    ## Order of trotter decomposition (1,2,4)
+TrottOrder      = 4       ## Order of trotter decomposition (1,2,4)
 dt = DT         = 0.01    ## time step
-T               = 0.4   ## Final time
+T               = 3.1     ## Final time
 
 nStepsCalc      = 100     ## We compute a physical observable every nStepsCalc
 
@@ -760,7 +759,9 @@ Rev_t = np.zeros((2*L,nComp), dtype=float)     ## Stores the eigenvalues of the 
 CumErr_t = np.zeros((L,nComp), dtype=float)     ## Stores the cumulative error
 AbsTime  = np.zeros(nComp, dtype=float)     ## Stores the time
 Norm     = np.zeros(nComp, dtype=float)     ## Stores the norm
-
+BondDim         = np.zeros((int(T),L+1), dtype=int)     ## Stores the BondDim
+BondDimRot      = np.zeros((int(T),L+1), dtype=int)     ## Stores the BondDim of the rotated operator
+Time = np.zeros(int(T))
 ##     ----------------------------------------------------------------------------------------
 ##     ----------------------------------- Parameters -------------------------------
 params = {'L':L, 'dt':dt, 'alpha':alpha, 'Truncation':truncation_type, 'chi': chi_max, 'Sect':s, 'TrottOrder':TrottOrder, 'Nsteps':Nsteps, 'phys_dims':phys_dims}
@@ -772,7 +773,7 @@ if model == 'Heis_nn':
     gates_layers = {"H0":seq0, "H1":seq1}     ## Sequences of gates that are applied at each Trott. step
 
 elif model == 'IRLM':
-    Uint   = 0.0 ## U is already the name of the gate
+    Uint   = 0.2 ## U is already the name of the gate
     V      = 0.2
     gamma  = 0.5
     ed     = 0
@@ -799,8 +800,8 @@ if save:
 ##     -------------------------------     Initialize O(0) ------------------------
 
 Op = classMPO(L, "Id")
-# sz = np.array(((1,0),(0,-1)), dtype=complex)
-# Op.MPO["B0"] = np.tensordot(sz, Op.MPO["B0"], axes=([1],[1])).transpose([1,0,2,3]à)
+sz = np.array(((1,0),(0,-1)), dtype=complex)
+Op.MPO["B0"] = np.tensordot(sz, Op.MPO["B0"], axes=([1],[1])).transpose([1,0,2,3])
 # Op.BondDim()
 
 ##     ----------------------------------------------------------------------------------------
@@ -811,7 +812,7 @@ st = time.time()
 for step, dt, newTstep, ComputeObs in TrotterSteps[step_t0:]:
     ## Apply the gates for the given layer.
     for (l1,l2) in gates_layers[step]:
-        Apply_gate_MPO(Op, U[step, dt], l1, l2, bothsides=False)
+        Apply_gate_MPO(Op, U[step, dt], l1, l2, bothsides=True)
 
     ## Real time step dt done
     if newTstep:
@@ -819,7 +820,36 @@ for step, dt, newTstep, ComputeObs in TrotterSteps[step_t0:]:
         print(Op.BondDim)
         print("Evolution time: ", np.round(t,4), "Computational time: ", time.time()-st, "\n")
         st = time.time()
+        
+        if t%1 <  1e-2:
+            Op.compress(1e-14)
+            BondDim[cpt] = Op.BondDim
+    
+    
+            R = MPO_Correlation_Matrix(Op)
+            A = R[::2,1::2].copy()
+            Aev, Aevecs = np.linalg.eigh(A)
+            
+            Oprot = Op.copy()
+            Oprot.rotate(A, Aevecs)
+            Oprot.compress(1e-14)
+            Oprot.EE()
+            
+            BondDimRot[cpt] = Oprot.BondDim
+            
+            Time[cpt] = t
+            cpt += 1
+        
+filename = "C:/Users/maxim/Documents/GitHub/Few_body_operators/Codes/IRLM_Sz"
+for key in params.keys():
+    filename = filename + str("_"+key+str(params[key]))
+with h5.File(filename+".h5", "w") as f:
+    f.create_dataset("BondDim",      data=BondDim)
+    f.create_dataset("BondDimRot",   data=BondDimRot)
+    f.create_dataset("t",   data=Time)
 
+        
+    
 ##     ----------------------------------------------------------------------------------------
 ##     --------------------------------    Rotation   -----------------------------------------
 

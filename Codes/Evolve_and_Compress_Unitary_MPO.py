@@ -152,6 +152,7 @@ class classMPO:
     def rotate_Unit(self, R):
         active = np.arange(L)
         for i in range(self.L):
+            print("Rotating i:", i)
             l = self.L - i
             sect = active[:l]
 
@@ -171,13 +172,14 @@ class classMPO:
                 Lgate_giv[1:-1,1:-1], Rgate_giv[1:-1,1:-1] = Lgivens[m].T,  Rgivens[m].T
                 Lgate_giv, Rgate_giv = Lgate_giv.reshape(2,2,2,2), Rgate_giv.reshape(2,2,2,2)
 
-                Apply_gate_MPO(self, Lgate_giv, ind[0], ind[1], bothsides=False, side="L", th=1e-15)
-                Apply_gate_MPO(self, Rgate_giv, ind[0], ind[1], bothsides=False, side="R", th=1e-10)
+                Apply_gate_MPO(self, Lgate_giv, ind[0], ind[1], bothsides=False, side="L", th=1e-12, right_gate = Rgate_giv)
+                # Apply_gate_MPO(self, Rgate_giv, ind[0], ind[1], bothsides=False, side="R", th=1e-12)
 
             ## Recompute the correlation matrix            
-            R = MPO_Correlation_Matrix(Op)
+            R = MPO_Correlation_Matrix(self)
+            print(self.BondDim)
 
-            self.compress(1e-14)
+            self.compress(1e-15)
 
     def compress(self, th):
         for i in range(1,self.L):
@@ -613,7 +615,7 @@ def Apply_gate_MPS(Psi, gate, l1, l2):
 ##      ----------------------------------------------------------------------
 ##      ---------------------------------------------------- ------------------
 
-def Apply_gate_MPO(Psi, gate, l1, l2, bothsides=True, side="L", th=1e-8):
+def Apply_gate_MPO(Psi, gate, l1, l2, bothsides=True, side="L", th=1e-12, right_gate = None):
     '''
         In Place. Apply a 2-body gate on an MPO by keeping the MPO structure. 
         
@@ -641,6 +643,9 @@ def Apply_gate_MPO(Psi, gate, l1, l2, bothsides=True, side="L", th=1e-8):
     UPhiB = np.tensordot(gate, PhiB, ([2,3],ind)).transpose(tr)
     if bothsides:
         UPhiB = np.tensordot(gate.conj(), UPhiB, ([2,3],[2,4])).transpose([2,3,0,4,1,5])
+    if type(right_gate) != type(None):
+        UPhiB = np.tensordot(right_gate, UPhiB, ([2,3],[2,4])).transpose([2,3,0,4,1,5])
+
     
     ## Absorb the lambda
     Phi = np.tensordot(np.diag(MPO["Lam%s"%l1]), UPhiB, ([1],[0])).reshape(ldim * 2 * 2, rdim * 2 * 2)
@@ -785,7 +790,7 @@ data_as_tensors = False     ## Stores the data as tensors (True) or as matrices 
 ##     ------------------------------- T. evol / Trotter Parameters ---------------------------
 TrottOrder      = 4         ## Order of trotter decomposition (1,2,4)
 dt = DT         = 0.01      ## time step
-T               = 1.3     ## Final time
+T               = 1.51       ## Final time
 
 nStepsCalc      = 100       ## We compute a physical observable every nStepsCalc
 
@@ -798,6 +803,9 @@ Rev_t = np.zeros((2*L,nComp), dtype=float)     ## Stores the eigenvalues of the 
 CumErr_t = np.zeros((L,nComp), dtype=float)     ## Stores the cumulative error
 AbsTime  = np.zeros(nComp, dtype=float)     ## Stores the time
 Norm     = np.zeros(nComp, dtype=float)     ## Stores the norm
+BondDim         = np.zeros((nComp,L+1), dtype=int)     ## Stores the BondDim
+BondDimRot      = np.zeros((nComp,L+1), dtype=int)     ## Stores the BondDim of the rotated operator
+Time = np.zeros(nComp)
 
 ##     ----------------------------------------------------------------------------------------
 ##     ----------------------------------- Parameters -------------------------------
@@ -810,7 +818,7 @@ if model == 'Heis_nn':
     gates_layers = {"H0":seq0, "H1":seq1}     ## Sequences of gates that are applied at each Trott. step
 
 elif model == 'IRLM':
-    Uint   = 0.4 ## U is already the name of the gate
+    Uint   = 0.2## U is already the name of the gate
     V      = 0.2
     gamma  = 0.5
     ed     = 0
@@ -857,7 +865,32 @@ for step, dt, newTstep, ComputeObs in TrotterSteps[step_t0:]:
         print(Op.BondDim)
         print("Evolution time: ", np.round(t,4), "Computational time: ", time.time()-st, "\n")
         st = time.time()
+        if (np.abs(t-0.5) <  1e-2) or (np.abs(t-1.0) <  1e-2) or (np.abs(t-1.5) <  1e-2):
+            Op.compress(1e-20)
+            BondDim[cpt] = Op.BondDim
+    
+            R = MPO_Correlation_Matrix(Op)
+            
+            Oprot = Op.copy()
+            Oprot.rotate_Unit(R)
+            Oprot.compress(1e-14)
+            Oprot.EE()
+            
+            BondDimRot[cpt] = Oprot.BondDim
 
+            Time[cpt] = t
+            cpt += 1
+            
+filename = "C:/Users/maxim/Documents/GitHub/Few_body_operators/Codes/IRLM_U"
+for key in params.keys():
+    filename = filename + str("_"+key+str(params[key]))
+with h5.File(filename+".h5", "w") as f:
+    f.create_dataset("BondDim",      data=BondDim)
+    f.create_dataset("BondDimRot",   data=BondDimRot)
+    f.create_dataset("t",   data=Time)
+    
+print(stop)
+    
 ##     ----------------------------------------------------------------------------------------
 ##     --------------------------------    Rotation   -----------------------------------------
 
@@ -889,7 +922,7 @@ D = Revecs[:,occ]
 Sz = np.sum( D[0,:].conj() * D[0,:]) - np.sum(D[0,:,None].conj() * D[0,:,None] * D[1,None,:].conj() * D[1,None,:]) + np.sum(D[0,:,None].conj() * D[1,:,None] * D[1,None,:].conj() * D[0,None,:])
 print("Err rot Wick: ", 1 - Sz / Sz_ex)
 
-Op.compress(1e-13)
+# Op.compress(1e-13)
 print("Before rotation: \n", Op.BondDim)
 
 ## Rotate orbitals one by one in the MPS
