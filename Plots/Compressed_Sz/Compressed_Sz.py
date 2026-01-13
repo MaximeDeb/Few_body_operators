@@ -16,12 +16,14 @@ V = 0.2
 ## ---------------------------------------------------------------
 ## Plot the spectrum for a given U
 ## ---------------------------------------------------------------
+mask = [1,3,4]
 
-filename = "C:/Users/maxim/Documents/GitHub/Few_body_operators/Plots/Compressed_Sz/IRLM_Sz_L30_dt0.01_alpha-1_Truncationglobal_chi1024_Sect30_TrottOrder4_Nsteps1010_phys_dims1_d2_Uint0.2_V0.2_gamma0.5_ed0_J0_Jz0.h5"
+filename = "C:/Users/maxim/Documents/GitHub/Few_body_operators/Plots/Compressed_Sz/IRLM_Sz_L30_dt0.01_alpha-1_Truncationglobal_chi1024_Sect30_TrottOrder4_Nsteps509_phys_dims1_d2_Uint0.1_V0.2_gamma0.5_ed0_J0_Jz0.h5"
 with h5.File(filename, 'r') as f:
-    BondDim = np.array(f['BondDim'])[::2]
-    BondDimRot = np.array(f['BondDimRot'])[::2]
-    Time = np.array(f['t'])[1::3]
+    BondDim = np.array(f['BondDim'])[mask]
+    BondDimRot = np.array(f['BondDimRot'])[mask]
+    Time = np.array(f['t'])[mask]
+print(Time)
 
 m = ['v','o','s']
 shade = 0.6

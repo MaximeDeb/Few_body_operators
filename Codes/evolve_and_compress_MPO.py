@@ -1,10 +1,17 @@
+"""
+Unified MPO Evolution and Compression Module
+
+Handles time evolution and compression of Matrix Product Operators (MPO)
+for both Hermitian and Unitary operators.
+"""
+
 import sys
 sys.path.append("C:/Users/maxim/Documents/GitHub/Few_body_operators/Codes/")
 
 import numpy as np
 import h5py as h5
 import time
-from typing import Optional, Dict, List, Tuple
+from typing import Optional, List, Tuple
 
 import Modules.trotter as trott
 
@@ -42,10 +49,8 @@ class classMPS:
         """Print entanglement entropy for each bond."""
         for i in range(self.L):
             ss = self.MPS[f"Lam{i}"]
-            ss_sq = ss**2
-            mask = ss_sq > 1e-15
-            S = -np.sum(np.log(ss_sq[mask]) * ss_sq[mask]) if mask.any() else 0
-            print(f"{i} Bond dim: {ss.shape} S = {S}")
+            entropy = np.sum(-np.log(ss**2) * ss**2)
+            print(f"{i} Bond dim: {ss.shape} S = {entropy}")
     
     def copy(self):
         """Create a deep copy of the MPS."""
@@ -157,12 +162,51 @@ class classMPO:
                 self.MPO[f"B{i}"] = self.MPO[f"B{i}"][mask, :, :, :]
                 self.BondDim[i] = mask.sum()
     
-    def rotate_Unit(self, R: np.ndarray) -> None:
+    def rotate_hermitian(self, A: np.ndarray) -> None:
         """
-        Rotate MPO using unitary transformation.
+        Rotate MPO using Hermitian rotation (for observables like Sz).
+        Uses eigendecomposition and applies gates on both sides.
         
         Args:
-            R: Correlation matrix for rotation
+            A: Correlation sub-matrix for rotation
+        """
+        active = np.arange(self.L)
+        
+        for i in range(self.L):
+            l = self.L - i
+            sect = active[:l]
+            
+            # Compute eigendecomposition
+            Aev, Aevecs = np.linalg.eigh(A[:l, :l])
+            
+            # Sort by distance from 1/2
+            order = np.argsort(0.5 - np.abs(Aev))[::-1]
+            Aev, Aevecs = Aev[order], Aevecs[:, order]
+            
+            # Apply Givens rotations
+            indices, givens = Givens_rotations(Aevecs, [l - 1], sect, direction="right")
+            
+            for m, ind in enumerate(indices):
+                gate_giv = np.eye(4, dtype=complex)
+                gate_giv[1:-1, 1:-1] = givens[m].T
+                gate_giv = gate_giv.reshape(2, 2, 2, 2)
+                
+                # CRITICAL: Apply gate on both sides for Hermitian operators
+                Apply_gate_MPO(self, gate_giv, ind[0], ind[1], bothsides=True)
+            
+            # Rotate correlation matrix
+            rot = RotFromGivens(indices, givens, sect)
+            A[:l, :l] = rot @ A[:l, :l] @ rot.conj().T
+            
+            self.compress()
+    
+    def rotate_unitary(self, R: np.ndarray) -> None:
+        """
+        Rotate MPO using Unitary rotation (for time evolution operators).
+        Uses SVD and applies separate left/right gates.
+        
+        Args:
+            R: Full correlation matrix for rotation
         """
         active = np.arange(self.L)
         
@@ -171,12 +215,15 @@ class classMPO:
             l = self.L - i
             sect = active[:l]
             
+            # Extract sub-matrix and perform SVD
             A = R[::2, 1::2].copy()
             U, S, Vd = np.linalg.svd(A[:l, :l])
             
+            # Sort by distance from 1/2
             order = np.argsort(0.5 - np.abs(S))[::-1]
             S, Lev, Rev = S[order], U[:, order], Vd.conj().T[:, order]
             
+            # Apply Givens rotations to both sides (separately)
             indices, Lgivens = Givens_rotations(Lev, [l - 1], sect, direction="right")
             indices, Rgivens = Givens_rotations(Rev.conj(), [l - 1], sect, direction="right")
             
@@ -188,9 +235,12 @@ class classMPO:
                 Lgate_giv = Lgate_giv.reshape(2, 2, 2, 2)
                 Rgate_giv = Rgate_giv.reshape(2, 2, 2, 2)
                 
+                # CRITICAL: Apply different gates on left and right for Unitary operators
                 Apply_gate_MPO(self, Lgate_giv, ind[0], ind[1], 
-                             bothsides=False, side="L", th=1e-12, right_gate=Rgate_giv)
+                             bothsides=False, side="L", th=1e-12, 
+                             right_gate=Rgate_giv)
             
+            # Recompute correlation matrix after each rotation
             R = MPO_Correlation_Matrix(self)
             print(self.BondDim)
             self.compress(1e-15)
@@ -413,62 +463,6 @@ def MPO_Correlation_Matrix(Op) -> np.ndarray:
     return R
 
 
-def MPS_Correlation_Matrix(Psi, sites: Optional[np.ndarray] = None) -> np.ndarray:
-    """
-    Compute correlation matrix for MPS.
-    
-    Args:
-        Psi: MPS object
-        sites: Sites to include (default: all sites)
-        
-    Returns:
-        Correlation matrix
-    """
-    c = np.array([[0, 1], [0, 0]], dtype=complex)
-    sz = np.array([[1, 0], [0, -1]], dtype=complex)
-    L = Psi.L
-    
-    # Compute normalization
-    norm = np.ones((1, 1), dtype=complex)
-    for i in range(L - 1):
-        norm = np.tensordot(norm, Psi.MPS[f"B{i}"].conj(), axes=([0], [0]))
-        norm = np.tensordot(norm, Psi.MPS[f"B{i}"], axes=([0, 1], [0, 1]))
-    norm = np.tensordot(norm, Psi.MPS[f"B{L-1}"].conj(), axes=([0], [0]))
-    norm = np.abs(np.tensordot(norm, Psi.MPS[f"B{L-1}"], axes=([0, 1, 2], [0, 1, 2])))
-    
-    if sites is None:
-        sites = np.arange(L)
-    
-    Q = np.zeros((len(sites), len(sites)), dtype=complex)
-    
-    for ind_i, i in enumerate(sites):
-        Bi = Psi.MPS[f"B{i}"]
-        Bic = np.tensordot(c, Bi, axes=([1], [1])).transpose(1, 0, 2)
-        Lam = np.diag(Psi.MPS[f"Lam{i}"])
-        
-        A = np.tensordot(Lam, Bic, axes=([1], [0]))
-        Q[ind_i, ind_i] = np.tensordot(A.conj(), A, axes=([0, 1, 2], [0, 1, 2]))
-        
-        Bc = np.tensordot(Lam, Bic, axes=([1], [0]))
-        B = np.tensordot(Lam, Bi, axes=([1], [0]))
-        Pac = np.tensordot(Bc.conj(), B, axes=([0, 1], [0, 1]))
-        
-        for ind_j, j in enumerate(sites[ind_i + 1:], start=ind_i + 1):
-            Bj = Psi.MPS[f"B{j}"]
-            Bjc = np.tensordot(c, Bj, axes=([1], [1])).transpose(1, 0, 2)
-            
-            A = np.tensordot(Pac, Bj.conj(), axes=([0], [0]))
-            Q[ind_i, ind_j] = np.tensordot(A, Bjc, axes=([0, 1, 2], [0, 1, 2]))
-            
-            Bjz = np.tensordot(sz, Bj, axes=([0], [1])).transpose(1, 0, 2)
-            Pac = np.tensordot(Pac, Bjz.conj(), axes=([0], [0]))
-            Pac = np.tensordot(Pac, Bj, axes=([0, 1], [0, 1]))
-    
-    Q = Q / norm
-    Q = Q + Q.conj().T - np.diag(Q.diagonal())
-    return Q
-
-
 def Apply_gate_MPS(Psi, gate: np.ndarray, l1: int, l2: int) -> None:
     """
     Apply 2-body gate to MPS (in-place).
@@ -513,10 +507,10 @@ def Apply_gate_MPO(Psi, gate: np.ndarray, l1: int, l2: int,
         Psi: MPO object
         gate: Gate tensor (2,2,2,2)
         l1, l2: Site indices
-        bothsides: Apply gate on both sides
+        bothsides: Apply gate on both sides (True for Hermitian, False for Unitary)
         side: "L" or "R" for one-sided application
         th: SVD truncation threshold
-        right_gate: Optional different gate for right side
+        right_gate: Optional different gate for right side (used in Unitary rotation)
     """
     MPO = Psi.MPO
     ldim = MPO[f"B{l1}"].shape[0]
@@ -533,10 +527,12 @@ def Apply_gate_MPO(Psi, gate: np.ndarray, l1: int, l2: int,
     UPhiB = np.tensordot(gate, PhiB, axes=([2, 3], ind)).transpose(tr)
     
     if bothsides:
+        # Hermitian case: apply conjugate gate on the other side
         UPhiB = np.tensordot(gate.conj(), UPhiB, axes=([2, 3], [2, 4]))
         UPhiB = UPhiB.transpose([2, 3, 0, 4, 1, 5])
     
     if right_gate is not None:
+        # Unitary case: apply different gate on the right
         UPhiB = np.tensordot(right_gate, UPhiB, axes=([2, 3], [2, 4]))
         UPhiB = UPhiB.transpose([2, 3, 0, 4, 1, 5])
     
@@ -557,51 +553,18 @@ def Apply_gate_MPO(Psi, gate: np.ndarray, l1: int, l2: int,
     Psi.BondDim[l2] = S.shape[0]
 
 
-def apply_MPO_MPS(O, Psi):
-    """Apply MPO to MPS."""
-    Res = classMPS(Psi.L)
-    
-    Res.MPS["B0"] = np.tensordot(O.MPO["B0"], Psi.MPS["B0"], axes=([2], [1]))
-    Res.MPS["B0"] = Res.MPS["B0"].transpose([0, 3, 1, 2, 4]).reshape(1, 2, -1)
-    Res.MPS["Lam0"] = np.ones(1, dtype=complex)
-    
-    for i in range(1, Psi.L):
-        A = np.tensordot(Res.MPS[f"B{i-1}"], O.MPO[f"B{i}"], axes=([2], [0]))
-        A = np.tensordot(A, Psi.MPS[f"B{i}"], axes=([2, 3], [0, 1]))
-        
-        ldim = A.shape[0]
-        rdim = A.shape[3] * A.shape[4]
-        
-        B = np.tensordot(np.diag(Res.MPS[f"Lam{i-1}"]), A, axes=([1], [0]))
-        B[np.abs(B) < 1e-20] = 0
-        
-        _, S, V = np.linalg.svd(B.reshape(ldim * 2, 2 * rdim), full_matrices=False)
-        
-        mask = S / np.linalg.norm(S) > 1e-10
-        S = S[mask] / np.linalg.norm(S[mask])
-        
-        B2 = V[mask, :].reshape(-1, 2, O.MPO[f"B{i}"].shape[3], Psi.MPS[f"B{i}"].shape[2])
-        B1 = np.tensordot(A, B2.conj(), axes=([2, 3, 4], [1, 2, 3]))
-        
-        Res.MPS[f"B{i-1}"] = B1
-        Res.MPS[f"Lam{i}"] = S
-        Res.MPS[f"B{i}"] = B2
-        Res.BondDim[i] = S.shape[0]
-    
-    Res.MPS[f"B{Psi.L-1}"] = Res.MPS[f"B{Psi.L-1}"].reshape(
-        Res.MPS[f"B{Psi.L-1}"].shape[0], 2, 1
-    )
-    
-    return Res
-
-
 # ==================== MAIN SCRIPT ====================
 
 if __name__ == "__main__":
     t0 = time.time()
     
+    # ===== CHOOSE OPERATOR TYPE =====
+    # Set to "hermitian" for observables (Sz), "unitary" for time evolution (U)
+    OPERATOR_TYPE = "hermitian"  # Change this to switch between modes
+    observable = "Sz" ## Only if operator_type == hermitian
+    
     # System parameters
-    L = 16
+    L = 30
     d = 2
     
     model = "IRLM"
@@ -619,19 +582,19 @@ if __name__ == "__main__":
     # Time evolution parameters
     TrottOrder = 4
     dt = DT = 0.01
-    T = 1.1
-    nStepsCalc = 100
+    T = 5.1
+    n_steps_calc = 100
     
     # Storage arrays
     Nsteps = int(T / dt)
-    nComp = 10 # Nsteps // nStepsCalc + (Nsteps % nStepsCalc > 0)
-    Rev_t      = np.zeros((2 * L, nComp), dtype=float)
-    CumErr_t   = np.zeros((L, nComp), dtype=float)
-    AbsTime    = np.zeros(nComp, dtype=float)
-    Norm       = np.zeros(nComp, dtype=float)
-    BondDim    = np.zeros((nComp, L + 1), dtype=int)
+    nComp = 10
+    Rev_t = np.zeros((2 * L, nComp), dtype=float)
+    CumErr_t = np.zeros((L, nComp), dtype=float)
+    AbsTime = np.zeros(nComp, dtype=float)
+    Norm = np.zeros(nComp, dtype=float)
+    BondDim = np.zeros((nComp, L + 1), dtype=int)
     BondDimRot = np.zeros((nComp, L + 1), dtype=int)
-    Time       = np.zeros(nComp)
+    Time = np.zeros(nComp)
     
     # Model parameters
     params = {
@@ -652,7 +615,7 @@ if __name__ == "__main__":
         gates_layers = {"H0": seq0, "H1": seq1}
         
     elif model == 'IRLM':
-        Uint = 0.2
+        Uint = 0.1
         V = 0.2
         gamma = 0.5
         ed = 0
@@ -666,29 +629,39 @@ if __name__ == "__main__":
         gates_layers = {"H0": seq0, "H1": seq1, "H2": seq2}
     
     # Print parameters
+    print(f"OPERATOR TYPE: {OPERATOR_TYPE.upper()}")
     for key, value in params.items():
         print(f"{key}: {value}")
     print("\n")
     
     # Trotter decomposition
-    nParts = len(gates_layers)
-    TrotterSteps, U, _, _ = trott.Trotter_Seq(
-        TrottOrder, Nsteps, dt, nParts, nStepsCalc, params,
-        alpha=alpha, data_as_tensors=data_as_tensors, model=model,
-        Hsteps=list(gates_layers.keys()), symm=False
+    n_parts = len(gates_layers)
+    TrotterSteps, U, _, _ = trott.trotter_sequence(
+        trotter_order=TrottOrder,
+        n_steps=Nsteps,
+        dt=dt,
+        n_parts=n_parts,
+        n_steps_calc=n_steps_calc,
+        params=params,
+        alpha=alpha,
+        data_as_tensors=data_as_tensors,
+        model=model,
+        h_steps=list(gates_layers.keys()),
+        symm=False
     )
-    
-    # Initialize file for saving
-    filename = f"../data/MPO/{model}/U_{model}"
-    for key, value in params.items():
-        filename += f"_{key}{value}"
-    
-    if save:
-        f = h5.File(filename + ".h5", "w")
     
     # Initialize operator
     Op = classMPO(L, "Id")
     
+    # Apply initial operator for Hermitian case (Sz)
+    if (OPERATOR_TYPE == "hermitian") and (observable == "Sz") :
+        sz = np.array([[1, 0], [0, -1]], dtype=complex)
+        Op.MPO["B0"] = np.tensordot(sz, Op.MPO["B0"], axes=([1], [1]))
+        Op.MPO["B0"] = Op.MPO["B0"].transpose([1, 0, 2, 3])
+    
+    # Determine bothsides parameter based on operator type
+    bothsides = (OPERATOR_TYPE == "hermitian")
+
     # Time evolution with TEBD
     t, cpt, step_t0 = 0.0, 0, 0
     st = time.time()
@@ -696,7 +669,7 @@ if __name__ == "__main__":
     for step, dt_step, newTstep, ComputeObs in TrotterSteps[step_t0:]:
         # Apply gates for the given layer
         for (l1, l2) in gates_layers[step]:
-            Apply_gate_MPO(Op, U[step, dt_step], l1, l2, bothsides=False)
+            Apply_gate_MPO(Op, U[step, dt_step], l1, l2, bothsides=bothsides)
         
         # Real time step done
         if newTstep:
@@ -705,27 +678,36 @@ if __name__ == "__main__":
             print(f"Evolution time: {np.round(t, 4)}, "
                   f"Computational time: {time.time() - st}\n")
             st = time.time()
-            
-            if np.abs(t - 0.5) < 1e-2 or np.abs(t - 1.0) < 1e-2 or np.abs(t - 1.5) < 1e-2:
-                Op.compress(1e-20)
+
+            # Compression and rotation at specific times
+            if (int(t/DT) % n_steps_calc) == 0:
+                compress_th = 1e-16
+                Op.compress(compress_th)
                 BondDim[cpt] = Op.BondDim
                 
                 R = MPO_Correlation_Matrix(Op)
                 
                 Oprot = Op.copy()
-                Oprot.rotate_Unit(R)
+                
+                # Choose rotation method based on operator type
+                if OPERATOR_TYPE == "hermitian":
+                    A = R[::2, 1::2].copy()
+                    Oprot.rotate_hermitian(A)
+                else:  # unitary
+                    Oprot.rotate_unitary(R)
+                
                 Oprot.compress(1e-14)
                 Oprot.EE()
                 
                 BondDimRot[cpt] = Oprot.BondDim
                 Time[cpt] = t
                 cpt += 1
-    
-    print("Temps final:", time.time()-t0)
-    print(stop)
+
+    print(f"Temps final: {time.time() - t0}")
     
     # Save results
-    filename = "C:/Users/maxim/Documents/GitHub/Few_body_operators/Codes/IRLM_U"
+    filename = f"C:/Users/maxim/Documents/GitHub/Few_body_operators/Codes/{model}"
+    filename += f"_{'Sz' if OPERATOR_TYPE == 'hermitian' else 'U'}"
     for key, value in params.items():
         filename += f"_{key}{value}"
     
@@ -735,45 +717,3 @@ if __name__ == "__main__":
         f.create_dataset("t", data=Time)
     
     print("Simulation completed successfully!")
-    
-    # Post-processing: Rotation analysis
-    R = MPO_Correlation_Matrix(Op)
-    Rev, Revecs = np.linalg.eigh(R)
-    
-    A = R[::2, 1::2].copy()
-    Aev, Aevecs = np.linalg.eigh(A)
-    
-    U_svd, S, Vd = np.linalg.svd(A)
-    
-    print("A eigenvalues: ", 0.5 - np.abs(Aev))
-    print("R eigenvalues: ", Rev)
-    
-    # Trace with MPO
-    Uni = Apply_Fermionic_Op("n", Op, 0, "R")
-    niU = Apply_Fermionic_Op("n", Op, 0, "L")
-    Sz_ex = Trace(niU, Uni)
-    print(f"\nTr(U+(t) ni U(t) ni) = {Sz_ex}")
-    
-    # Occupation analysis
-    occ = Rev > 0.5
-    D = Revecs[:, occ]
-    
-    Sz = (np.sum(D[0, :].conj() * D[0, :]) - 
-          np.sum(D[0, :, None].conj() * D[0, :, None] * 
-                 D[1, None, :].conj() * D[1, None, :]) + 
-          np.sum(D[0, :, None].conj() * D[1, :, None] * 
-                 D[1, None, :].conj() * D[0, None, :]))
-    print(f"Err rot Wick: {1 - Sz / Sz_ex}")
-    
-    print("Before rotation:")
-    print(Op.BondDim)
-    
-    # Rotate orbitals
-    Op.rotate_Unit(R)
-    Op.compress(1e-13)
-    Op.EE()
-    
-    print("After rotation:")
-    print(Op.BondDim)
-    
-    print("\nDiagonal of real R:", np.abs(R.diagonal()))
