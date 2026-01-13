@@ -1,0 +1,7 @@
+C:/Users/maxim/Documents/GitHub/Few_body_operators/Codes/MPO_Simulation_ITensor/build/CMakeFiles/mpo_sim_itensor.dir
+C:/Users/maxim/Documents/GitHub/Few_body_operators/Codes/MPO_Simulation_ITensor/build/CMakeFiles/edit_cache.dir
+C:/Users/maxim/Documents/GitHub/Few_body_operators/Codes/MPO_Simulation_ITensor/build/CMakeFiles/rebuild_cache.dir
+C:/Users/maxim/Documents/GitHub/Few_body_operators/Codes/MPO_Simulation_ITensor/build/CMakeFiles/list_install_components.dir
+C:/Users/maxim/Documents/GitHub/Few_body_operators/Codes/MPO_Simulation_ITensor/build/CMakeFiles/install.dir
+C:/Users/maxim/Documents/GitHub/Few_body_operators/Codes/MPO_Simulation_ITensor/build/CMakeFiles/install/local.dir
+C:/Users/maxim/Documents/GitHub/Few_body_operators/Codes/MPO_Simulation_ITensor/build/CMakeFiles/install/strip.dir

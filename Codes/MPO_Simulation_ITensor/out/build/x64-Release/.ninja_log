@@ -1,0 +1,4 @@
+# ninja log v6
+5	21	7889895514177602	clean	5345ca6175c2c29c
+6	6843	7889899272371694	CMakeFiles/mpo_sim.dir/src/tensor_network.cpp.obj	ded594a099d691c0
+6850	7939	7889899340865614	mpo_sim.exe	de5071051b3fb790

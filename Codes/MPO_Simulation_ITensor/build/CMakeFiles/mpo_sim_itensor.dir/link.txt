@@ -1,0 +1,3 @@
+C:\msys64\mingw64\bin\cmake.exe -E rm -f CMakeFiles\mpo_sim_itensor.dir/objects.a
+C:\msys64\mingw64\bin\ar.exe qc CMakeFiles\mpo_sim_itensor.dir/objects.a @CMakeFiles\mpo_sim_itensor.dir\objects1.rsp
+C:\msys64\mingw64\bin\c++.exe  -pthread -O3 -march=native -DNDEBUG -Wl,--whole-archive CMakeFiles\mpo_sim_itensor.dir/objects.a -Wl,--no-whole-archive -o mpo_sim_itensor.exe -Wl,--out-implib,libmpo_sim_itensor.dll.a -Wl,--major-image-version,0,--minor-image-version,0 @CMakeFiles\mpo_sim_itensor.dir\linkLibs.rsp

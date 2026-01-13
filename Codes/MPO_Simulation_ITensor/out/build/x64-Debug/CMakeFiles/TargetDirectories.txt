@@ -1,0 +1,3 @@
+C:/Users/maxim/Documents/GitHub/Few_body_operators/Codes/C++ Claude/out/build/x64-Debug/CMakeFiles/mpo_sim.dir
+C:/Users/maxim/Documents/GitHub/Few_body_operators/Codes/C++ Claude/out/build/x64-Debug/CMakeFiles/edit_cache.dir
+C:/Users/maxim/Documents/GitHub/Few_body_operators/Codes/C++ Claude/out/build/x64-Debug/CMakeFiles/rebuild_cache.dir

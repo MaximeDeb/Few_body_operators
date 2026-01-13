@@ -767,7 +767,7 @@ def apply_MPO_MPS(O, Psi):
 
 
 ## 
-L = 20 ## Size of the tensor network
+L = 16 ## Size of the tensor network
 d = 2     ## Local physical dimension
 
 model = "IRLM"     ## "Heis_nn" or "IRLM"
@@ -790,7 +790,7 @@ data_as_tensors = False     ## Stores the data as tensors (True) or as matrices 
 ##     ------------------------------- T. evol / Trotter Parameters ---------------------------
 TrottOrder      = 4         ## Order of trotter decomposition (1,2,4)
 dt = DT         = 0.01      ## time step
-T               = 1.51       ## Final time
+T               = 1.1       ## Final time
 
 nStepsCalc      = 100       ## We compute a physical observable every nStepsCalc
 
@@ -798,6 +798,7 @@ nStepsCalc      = 100       ## We compute a physical observable every nStepsCalc
 ##     ----------------------------------- Quantities we want to store  ---------------------------
 Nsteps = int(T/dt) ## Steps of time evolution
 nComp = (Nsteps//nStepsCalc + Nsteps%nStepsCalc) ## Nb of elements that we compute (every nStepsCalc)
+nComp = 10
 
 Rev_t = np.zeros((2*L,nComp), dtype=float)     ## Stores the eigenvalues of the R matrix
 CumErr_t = np.zeros((L,nComp), dtype=float)     ## Stores the cumulative error
@@ -880,7 +881,11 @@ for step, dt, newTstep, ComputeObs in TrotterSteps[step_t0:]:
 
             Time[cpt] = t
             cpt += 1
-            
+
+print("Temps final:", time.time()-t0)
+print(stop)
+
+
 filename = "C:/Users/maxim/Documents/GitHub/Few_body_operators/Codes/IRLM_U"
 for key in params.keys():
     filename = filename + str("_"+key+str(params[key]))
